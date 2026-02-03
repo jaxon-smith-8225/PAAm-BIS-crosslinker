@@ -5,8 +5,6 @@ import warnings
 warnings.filterwarnings('ignore')
 import time
 
-# usage: python 
-
 OUTPUT_STRUCTURE = "output.pdb"
 MIN_RAND_ANGLE = 20
 MAX_RAND_ANGLE = 200
