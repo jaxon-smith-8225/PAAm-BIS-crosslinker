@@ -9,10 +9,11 @@ OUTPUT_STRUCTURE = "output.pdb"
 MIN_RAND_ANGLE = 20
 MAX_RAND_ANGLE = 200
 RAND_CHAIN_ROTATION = True
-CHAIN_RADIUS = 3.7
+CHAIN_RADIUS = 3.8
 MAX_NUM_CHAINS = 20
 MAX_ROATAION_ATTEMPTS = 25
 
+# Simplified representation of PAAm chains for collision detection
 class ChainCylinder:
     """Represents a cylindrical bounding volume for a PAAm chain"""
     def __init__(self, start_point, end_point, radius=CHAIN_RADIUS):
@@ -29,7 +30,109 @@ class ChainCylinder:
     def length(self):
         return np.linalg.norm(self.axis)
 
+# Template class to precompute and cache reactive sites
+class PAAmTemplate:
+    """Reusable PAAm template with pre-computed reactive sites"""
+    
+    def __init__(self, pdb_file="PAAm25mer.pdb"):
+        # Load the template 
+        self.universe = mda.Universe(pdb_file, context='default', to_guess=['elements', 'bonds'])
+        self.original_positions = self.universe.atoms.positions.copy()
+        
+        # Scan for reactive sites
+        self.reactive_sites = scan_chain(self.universe)
+        
+        # Pre-compute which sites are valid (not first or last)
+        self.valid_site_indices = list(range(1, len(self.reactive_sites) - 1))
+        
+        print(f"Template loaded: {len(self.reactive_sites)} reactive sites found, "
+              f"{len(self.valid_site_indices)} are valid for crosslinking")
+    
+    def get_fresh_universe(self):
+        """
+        Return a new universe with positions reset to original
+        """
+        # Create new universe instance
+        new_univ = mda.Universe(self.universe.filename, context='default', 
+                                to_guess=['elements', 'bonds'])
+        # Reset to original positions
+        new_univ.atoms.positions = self.original_positions.copy()
+        return new_univ
+    
+    def get_site_info(self, site_index):
+        """Get reactive site info without re-scanning"""
+        return self.reactive_sites[site_index]
+
+# Network class to manage growing structure and metadata
+class CrosslinkNetwork:
+    """Manages the growing crosslinked structure and its metadata"""
+    
+    def __init__(self, initial_chain_universe):
+        self.structure = initial_chain_universe  # Current mda.Universe
+        self.cylinders = []  # Collision detection cylinders
+        self.crosslink_positions = []  # Positions of crosslinks
+        self.chain_info = []  # Metadata about each chain
+        
+        # Add the initial chain
+        initial_cylinder = create_chain_cylinder(initial_chain_universe.atoms)
+        self.cylinders.append(initial_cylinder)
+        self.chain_info.append({
+            'chain_id': 0,
+            'cylinder': initial_cylinder,
+            'added_at_step': 0
+        })
+    
+    def add_chain(self, new_structure, new_cylinder, crosslink_position):
+        """
+        Add a new chain to the network
+        
+        Args:
+            new_structure: Updated MDAnalysis universe with new chain
+            new_cylinder: ChainCylinder for the new chain
+            crosslink_position: Position where crosslink was made
+        """
+        self.structure = new_structure
+        self.cylinders.append(new_cylinder)
+        self.crosslink_positions.append(crosslink_position)
+        
+        chain_id = len(self.chain_info)
+        self.chain_info.append({
+            'chain_id': chain_id,
+            'cylinder': new_cylinder,
+            'added_at_step': chain_id
+        })
+    
+    def num_chains(self):
+        """Return total number of chains"""
+        return len(self.chain_info)
+    
+    def check_collision(self, new_cylinder):
+        """
+        Check if new cylinder collides with any existing cylinders
+        """
+        for cyl in self.cylinders:
+            if cylinders_collide(new_cylinder, cyl):
+                return True
+        return False
+    
+    def find_valid_sites(self, min_distance=10.0):
+        """
+        Find all reactive sites that are far enough from existing crosslinks
+        Returns list of site dictionaries
+        """
+        linking_groups = scan_chain(self.structure)
+        
+        # Filter sites: exclude first/last AND too close to crosslinks
+        valid_sites = []
+        for site in linking_groups[1:-1]:
+            if not is_site_too_close(site, self.crosslink_positions, min_distance):
+                valid_sites.append(site)
+        
+        return valid_sites
+
+
 # Math utils
+
 
 def segment_segment_distance(a1, a2, b1, b2):
     """Calculate the minimum distance between two line segments in 3D space (Credit: Arfana)"""
@@ -52,16 +155,6 @@ def cylinders_collide(cyl1, cyl2):
         cyl2.start, cyl2.end
     )
     return dist < (cyl1.radius + cyl2.radius)
-
-def check_collision(new_cylinder, cylinders):
-    """
-    Check new cylinder against all existing cylinders
-    Return True if collision
-    """
-    for cyl in cylinders:
-        if cylinders_collide(new_cylinder, cyl):
-            return True
-    return False
 
 def angle_between_vectors(v1, v2):
     """Calculate angle (in degrees) between two vectors"""
@@ -252,7 +345,9 @@ def create_chain_cylinder(chain_AtomGroup, radius=CHAIN_RADIUS):
     
     return ChainCylinder(start_point, end_point, radius)
 
+
 # Cross linking operations
+
 
 def replace_with_bis(linking_site, chain_universe):
     """Replace a reactive site with a BIS crosslinker molecule."""
@@ -280,40 +375,49 @@ def replace_with_bis(linking_site, chain_universe):
     
     return mda.Merge(atoms_to_keep, bis_univ.atoms), bis_univ
 
-def connect_PAAm(bis_univ, structure_univ, cylinders, 
+def connect_PAAm(bis_univ, structure_univ, network, template, num_checks,
                  max_rotation_attempts=MAX_ROATAION_ATTEMPTS, 
                  random_rotation=RAND_CHAIN_ROTATION):
     """Connect a new PAAm chain to an existing BIS crosslinker"""
     max_site_attempts = 10
     
+    # Cache BIS structure
     bis_attachment = bis_univ.select_atoms('index 6')[0]
     end_carbon = bis_univ.select_atoms('index 5')[0]
-    bis_attachment_pos = bis_attachment.position  # Cache position
-    bis_dir_template = end_carbon.position - bis_attachment_pos
-    
+    bis_attachment_pos = bis_attachment.position.copy()  # Cache position
+    bis_dir_template = (end_carbon.position - bis_attachment_pos).copy()
+
     for site_attempt in range(max_site_attempts):
-        # Load template once per site
-        temp_univ = mda.Universe("PAAm25mer.pdb", context='default', to_guess=['elements', 'bonds'])
-        linking_groups = scan_chain(temp_univ)
-        
-        if len(linking_groups) < 3:
+        # Use pre-computed valid sites from template
+        if not template.valid_site_indices:
             continue
             
-        rand_group = random.randint(1, len(linking_groups) - 2)
-        linking_site = linking_groups[rand_group]
+        # Pick which site index to use (from pre-scanned list)
+        rand_group_index = random.choice(template.valid_site_indices)
+        
+        # Create universe once per site attempt
+        new_PAAm_univ = template.get_fresh_universe()
+        
+        # Scan once per site attempt  
+        linking_groups_new = scan_chain(new_PAAm_univ)
+        linking_site = linking_groups_new[rand_group_index]
+        
+        # Get initial site geometry
+        site = unpack_linking_site(linking_site)
+        initial_reactive_dir = calculate_reactive_direction(site)
 
         ANGLE = 0
 
         for rotation_attempt in range(max_rotation_attempts):            
-            # Load fresh universe for rotation
-            new_PAAm_univ = mda.Universe("PAAm25mer.pdb", context='default', to_guess=['elements', 'bonds'])
+            # Reset to original positions
+            if rotation_attempt > 0:
+                new_PAAm_univ.atoms.positions = template.original_positions.copy()
             
-            # Reuse site info from first scan
-            linking_groups_new = scan_chain(new_PAAm_univ)
-            linking_site_new = linking_groups_new[rand_group]
-            site = unpack_linking_site(linking_site_new)
-
+            # Recalculate reactive direction (positions reset, so recalc needed)
+            site = unpack_linking_site(linking_site)
             reactive_dir = calculate_reactive_direction(site)
+            
+            # Use cached bis direction
             bis_dir = bis_dir_template.copy()
 
             align_molecule(new_PAAm_univ, reactive_dir, bis_dir)
@@ -332,62 +436,70 @@ def connect_PAAm(bis_univ, structure_univ, cylinders,
 
             new_cylinder = create_chain_cylinder(atoms_to_keep)
 
-            if check_collision(new_cylinder, cylinders):
+            # IMPROVEMENT: Use network's collision checking
+            if network.check_collision(new_cylinder):
+                num_checks += 1
                 continue  # try again
 
-            return mda.Merge(atoms_to_keep, structure_univ.atoms), new_cylinder
+            return mda.Merge(atoms_to_keep, structure_univ.atoms), new_cylinder, num_checks
 
-    raise RuntimeError("Failed to place PAAm without collision")
+    raise RuntimeError("Failed to place chain without collision")
 
 
-# Main ======================================================================================================
+# =================================================================================================================
+#                                                       Main
+# =================================================================================================================
 
 def main():
-    cylinders = []
-    crosslink_positions = []
-    num_added_chains = 0
+    num_checks = 0
     
-    current_structure = mda.Universe("PAAm25mer.pdb", context='default', to_guess=['elements', 'bonds'])
-    chain_cylinder = create_chain_cylinder(current_structure.atoms)
-    cylinders.append(chain_cylinder)
-    print(f'Initial chain added. Total chains: 1')
+    # Create template class
+    print("Loading PAAm template...")
+    template = PAAmTemplate("PAAm25mer.pdb")
     
-    while num_added_chains < MAX_NUM_CHAINS - 1:  # -1 because we start with 1
+    # Initialize network with first chain
+    print("Initializing network with first chain...")
+    initial_structure = mda.Universe("PAAm25mer.pdb", context='default', 
+                                     to_guess=['elements', 'bonds'])
+    network = CrosslinkNetwork(initial_structure)
+    print(f'Initial chain added. Total chains: {network.num_chains()}')
+    
+    # Main loop - keep adding chains
+    while network.num_chains() < MAX_NUM_CHAINS:
         
-        linking_groups = scan_chain(current_structure)
-        
-        # Filter out sites too close to existing crosslinks
-        valid_sites = [site for site in linking_groups[1:-1]  # exclude first/last
-                       if not is_site_too_close(site, crosslink_positions)]
+        # Use network method to find valid sites
+        valid_sites = network.find_valid_sites(min_distance=10.0)
         
         if not valid_sites:
             print("No valid sites found - all too close to existing crosslinks")
             break
         
-        # Pick from valid sites only
+        # Pick a random valid site
         linking_site = random.choice(valid_sites)
         backbone_carbon_pos = linking_site['backbone_carbon'][0].position.copy()
-        crosslink_positions.append(backbone_carbon_pos)
 
         # Replace reactive site with BIS
-        first_modified_univ, bis_univ = replace_with_bis(linking_site, current_structure)
+        first_modified_univ, bis_univ = replace_with_bis(linking_site, network.structure)
         
         try:
-            final_modified_univ, new_cylinder = connect_PAAm(bis_univ, first_modified_univ, cylinders)
-        except RuntimeError:
+            # Pass network and template instead of individual lists
+            final_modified_univ, new_cylinder, num_checks = connect_PAAm(
+                bis_univ, first_modified_univ, network, template, num_checks
+            )
+        except RuntimeError as e:
+            print(f"{e}: Trying again")
             continue
         
-        cylinders.append(new_cylinder)
+        # Use network method to add chain w/ all metadata
+        network.add_chain(final_modified_univ, new_cylinder, backbone_carbon_pos)
         
-        current_structure = final_modified_univ
-        
-        num_added_chains += 1
-        print(f'Hit! Total chains: {num_added_chains + 1}')
+        print(f'Hit! Total chains: {network.num_chains()}')
     
-    # Write final structure once
+    # Write final structure
     print(f"\nWriting final structure to {OUTPUT_STRUCTURE}...")
-    current_structure.select_atoms('all').write(OUTPUT_STRUCTURE)
-    print(f"Final structure saved with {num_added_chains + 1} total chains!")
+    network.structure.select_atoms('all').write(OUTPUT_STRUCTURE)
+    print(f"Final structure saved with {network.num_chains()} total chains!")
+    print(f'Total collision checks performed: {num_checks}')
 
 if __name__ == '__main__':
     start_time = time.perf_counter()
