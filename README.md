@@ -125,12 +125,3 @@ Edit `config.py` to adjust:
 ## Output
 
 - `output.pdb`: Final crosslinked network structure (configurable in `config.py`)
-
-## Benefits of Modular Structure
-
-1. **Easier testing**: Each module can be tested independently
-2. **Better organization**: Related functions grouped logically
-3. **Reusability**: Import specific functions in other projects
-4. **Maintainability**: Changes isolated to relevant modules
-5. **Collaboration**: Multiple people can work on different modules
-6. **Documentation**: Clearer purpose for each component
