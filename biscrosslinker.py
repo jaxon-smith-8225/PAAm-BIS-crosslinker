@@ -345,6 +345,9 @@ def create_chain_cylinder(chain_AtomGroup, radius=CHAIN_RADIUS):
     
     return ChainCylinder(start_point, end_point, radius)
 
+def increment_num_checks(NUM_CHECKS):
+    NUM_CHECKS += 1
+    return
 
 # Cross linking operations
 
@@ -375,7 +378,7 @@ def replace_with_bis(linking_site, chain_universe):
     
     return mda.Merge(atoms_to_keep, bis_univ.atoms), bis_univ
 
-def connect_PAAm(bis_univ, structure_univ, network, template, num_checks,
+def connect_PAAm(bis_univ, structure_univ, network, template,
                  max_rotation_attempts=MAX_ROATAION_ATTEMPTS, 
                  random_rotation=RAND_CHAIN_ROTATION):
     """Connect a new PAAm chain to an existing BIS crosslinker"""
@@ -438,10 +441,13 @@ def connect_PAAm(bis_univ, structure_univ, network, template, num_checks,
 
             # IMPROVEMENT: Use network's collision checking
             if network.check_collision(new_cylinder):
-                num_checks += 1
                 continue  # try again
 
-            return mda.Merge(atoms_to_keep, structure_univ.atoms), new_cylinder, num_checks
+            #  LOOP CHECKING GOES HERE
+            #  LOOP FORMING GOES AFTER
+            #  IF NO LOOP --> MERGE LIKE NORMAL
+
+            return mda.Merge(atoms_to_keep, structure_univ.atoms), new_cylinder
 
     raise RuntimeError("Failed to place chain without collision")
 
@@ -451,7 +457,6 @@ def connect_PAAm(bis_univ, structure_univ, network, template, num_checks,
 # =================================================================================================================
 
 def main():
-    num_checks = 0
     
     # Create template class
     print("Loading PAAm template...")
@@ -483,8 +488,8 @@ def main():
         
         try:
             # Pass network and template instead of individual lists
-            final_modified_univ, new_cylinder, num_checks = connect_PAAm(
-                bis_univ, first_modified_univ, network, template, num_checks
+            final_modified_univ, new_cylinder = connect_PAAm(
+                bis_univ, first_modified_univ, network, template
             )
         except RuntimeError as e:
             print(f"{e}: Trying again")
@@ -499,7 +504,6 @@ def main():
     print(f"\nWriting final structure to {OUTPUT_STRUCTURE}...")
     network.structure.select_atoms('all').write(OUTPUT_STRUCTURE)
     print(f"Final structure saved with {network.num_chains()} total chains!")
-    print(f'Total collision checks performed: {num_checks}')
 
 if __name__ == '__main__':
     start_time = time.perf_counter()
