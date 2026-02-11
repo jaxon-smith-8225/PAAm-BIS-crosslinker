@@ -116,8 +116,8 @@ def connect_PAAm(bis_univ, structure_univ, network, template,
             if random_rotation:
                 apply_random_rotation(new_PAAm_univ, bis_dir, MIN_RAND_ANGLE, MAX_RAND_ANGLE)
             else:
-                rotate_by_angle(new_PAAm_univ, bis_dir, angle=ANGLE)
-                ANGLE += 360 / MAX_ROTATION_ATTEMPTS + 1.77
+                rotate_by_angle(new_PAAm_univ.select_atoms('all'), bis_dir, angle=ANGLE)
+                ANGLE += 360 / MAX_ROTATION_ATTEMPTS + 1
 
             reactive_group = get_reactive_group(site)
             atoms_to_keep = new_PAAm_univ.select_atoms('all').subtract(reactive_group)
@@ -142,12 +142,13 @@ def connect_PAAm(bis_univ, structure_univ, network, template,
                     good_hits.append(cylinder)
                     good_points.append(find_point_of_intersection(cylinder, t))
                     rotate_by_angle(atoms_to_keep, bis_dir, 0., end_carbon.position)
-                    # print('rotated a chain')
                     has_looped = True
-            new_cylinder = create_chain_cylinder(atoms_to_keep)
-            if network.check_collision(new_cylinder):
-                continue  # try again
+                new_cylinder = create_chain_cylinder(atoms_to_keep)
+                if network.check_collision(new_cylinder):
+                    has_looped = False
+                    continue  # try again
 # LOOP LOGIC ==============================================================================
+
             return mda.Merge(atoms_to_keep, structure_univ.atoms), new_cylinder
 
     raise RuntimeError("Failed to place chain without collision")
