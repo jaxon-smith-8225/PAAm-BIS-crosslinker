@@ -140,26 +140,44 @@ def calculate_reactive_direction(unpacked_site):
             unpacked_site['backbone_carbon'].position)
 
 
-def create_chain_cylinder(chain_atom_group, radius=CHAIN_RADIUS):
+def create_chain_cylinder(chain_atom_group, radius=CHAIN_RADIUS,
+                          start_index=None, end_index=None):
     """
-    Create cylindrical bounding volume for a chain
-    
+    Create cylindrical bounding volume for a chain.
+
+    If start_index and end_index are both provided, they are used to look up
+    the terminal atom positions directly — useful when you know the exact
+    indices of the end carbons. Positions are looked up fresh from the atom
+    group each call, so they are always current after translations/rotations.
+    Otherwise, the function falls back to the first and last carbon atoms in
+    the atom group.
+
     Args:
         chain_atom_group: MDAnalysis AtomGroup representing the chain
         radius: Radius of the cylinder
-        
+        start_index: Optional integer index of the start terminal atom
+        end_index: Optional integer index of the end terminal atom
+
     Returns:
         ChainCylinder object
     """
-    # Single selection instead of multiple
-    backbone_carbons = chain_atom_group.select_atoms('element C')
-    
-    if len(backbone_carbons) < 2:
-        # Fallback: use first and last atoms
+    if start_index is not None and end_index is not None:
+        start_point = chain_atom_group.atoms[start_index].position.copy()
+        end_point   = chain_atom_group.atoms[end_index].position.copy()
+        return ChainCylinder(start_point, end_point, radius)
+
+    # Fallback: find terminal carbons by their unique name CTS
+    terminal_carbons = chain_atom_group.select_atoms('name CTS')
+
+    if len(terminal_carbons) == 2:
+        start_point = terminal_carbons[0].position.copy()
+        end_point   = terminal_carbons[1].position.copy()
+    elif len(terminal_carbons) < 2:
+        # Last resort if CTS atoms aren't present (e.g. BIS or partial structures)
         start_point = chain_atom_group[0].position.copy()
-        end_point = chain_atom_group[-1].position.copy()
+        end_point   = chain_atom_group[-1].position.copy()
     else:
-        # Use first and last backbone carbons
-        start_point = backbone_carbons[0].position.copy()
-        end_point = backbone_carbons[-1].position.copy()
+        raise ValueError(f"Expected exactly 2 CTS atoms, found {len(terminal_carbons)}. "
+                         f"Check your PDB template.")
+
     return ChainCylinder(start_point, end_point, radius)

@@ -111,17 +111,22 @@ class CrosslinkNetwork:
         """
         return len(self.chain_info)
     
-    def check_collision(self, new_cylinder):
+    def check_collision(self, new_cylinder, skip_cylinder=None):
         """
         Check if new cylinder collides with any existing cylinders
-        
+
         Args:
             new_cylinder: ChainCylinder to check
-            
+            skip_cylinder: ChainCylinder to skip (e.g. the parent cylinder the
+                           new chain is directly attached to, which will always
+                           share an endpoint and should not count as a collision)
+
         Returns:
             True if collision detected, False otherwise
         """
         for cyl in self.cylinders:
+            if skip_cylinder is not None and cyl is skip_cylinder:
+                continue
             if cylinders_collide(new_cylinder, cyl):
                 return True
         return False
@@ -138,7 +143,7 @@ class CrosslinkNetwork:
         """
         linking_groups = scan_chain(self.structure)
         
-        # Filter sites: exclude first/last AND too close to crosslinks
+        # Filter sites: exclude first/last and too close to crosslinks
         valid_sites = []
         for site in linking_groups[1:-1]:
             if not is_site_too_close(site, self.crosslink_positions, min_distance):

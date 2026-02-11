@@ -2,6 +2,7 @@
 Core crosslinking operations for connecting polymer chains
 """
 import random
+import numpy as np
 import MDAnalysis as mda
 from .chemistry import (
     unpack_linking_site, 
@@ -10,9 +11,9 @@ from .chemistry import (
     create_chain_cylinder,
     scan_chain
 )
-from .geometry import align_molecule, apply_random_rotation, rotate_by_angle
+from .geometry import align_molecule, apply_random_rotation, rotate_by_angle, r12, point_segment_distance
 from .loops import coarse_circle_radius, find_possible_crosses, does_cyl_cross_plane, find_point_of_intersection
-from .config import MAX_ROTATION_ATTEMPTS, RAND_CHAIN_ROTATION, MIN_RAND_ANGLE, MAX_RAND_ANGLE
+from .config import MAX_ROTATION_ATTEMPTS, RAND_CHAIN_ROTATION, MIN_RAND_ANGLE, MAX_RAND_ANGLE, MAX_BIS_ORIENTATION_ANGLE, ENABLE_LOOPING
 
 
 def replace_with_bis(linking_site, chain_universe):
@@ -75,8 +76,11 @@ def connect_PAAm(bis_univ, structure_univ, network, template,
     # Cache BIS structure
     bis_attachment = bis_univ.select_atoms('index 6')[0]
     end_carbon = bis_univ.select_atoms('index 5')[0]
-    bis_attachment_pos = bis_attachment.position.copy()  # Cache position
+    bis_attachment_pos = bis_attachment.position.copy()
     bis_dir_template = (end_carbon.position - bis_attachment_pos).copy()
+
+    # The cylinder the BIS is attached to is the most recently added one
+    parent_cylinder = network.cylinders[-1] if network.cylinders else None
 
     for site_attempt in range(max_site_attempts):
         # Use pre-computed valid sites from template
@@ -108,7 +112,7 @@ def connect_PAAm(bis_univ, structure_univ, network, template,
             site = unpack_linking_site(linking_site)
             reactive_dir = calculate_reactive_direction(site)
             
-            # Use cached bis direction
+            # Use cached BIS direction
             bis_dir = bis_dir_template.copy()
 
             align_molecule(new_PAAm_univ, reactive_dir, bis_dir)
@@ -125,28 +129,119 @@ def connect_PAAm(bis_univ, structure_univ, network, template,
             displacement = bis_attachment_pos - site['reactive_carbon'].position
             atoms_to_keep.translate(displacement)
 
-            new_cylinder = create_chain_cylinder(atoms_to_keep)
+            cts_atoms = atoms_to_keep.select_atoms('name CTS')
+            new_cylinder = create_chain_cylinder(
+                atoms_to_keep,
+                start_index=cts_atoms[0].index,
+                end_index=cts_atoms[1].index
+            )
+            monomer_length = new_cylinder.length / 25 #HARD CODED ==> NEED TO CHANGE FOR DIFF CHAIN LENGTHS
+            # NAIVE WAY TO MEASURE MONOMER LENGTH, BETTER TO GET DISTANCES FROM CIRCLE CENTER
 
-            # Use network's collision checking
-            if network.check_collision(new_cylinder):
+            # Use network's collision checking, skipping the parent cylinder
+            if network.check_collision(new_cylinder, skip_cylinder=parent_cylinder):
                 continue  # try again
-
+            
 # LOOP LOGIC ==============================================================================
-            circle_radius = coarse_circle_radius(end_carbon.position, new_cylinder)
-            possible_hits = find_possible_crosses(end_carbon.position, circle_radius, network)
-            good_hits, good_points = [], []
-            has_looped = False
-            for cylinder in possible_hits:
-                does_cross_plane, t = does_cyl_cross_plane(bis_dir, cylinder, end_carbon.position)
-                if not has_looped and does_cross_plane:
-                    good_hits.append(cylinder)
-                    good_points.append(find_point_of_intersection(cylinder, t))
-                    rotate_by_angle(atoms_to_keep, bis_dir, 0., end_carbon.position)
-                    has_looped = True
-                new_cylinder = create_chain_cylinder(atoms_to_keep)
-                if network.check_collision(new_cylinder):
-                    has_looped = False
-                    continue  # try again
+            if ENABLE_LOOPING:
+                circle_radius = coarse_circle_radius(end_carbon.position, new_cylinder)
+                possible_hits = find_possible_crosses(end_carbon.position, circle_radius, network)
+                has_looped = False
+                
+                for cylinder in possible_hits:
+                    does_cross_plane, intersection_point = does_cyl_cross_plane(bis_dir, cylinder, end_carbon.position)
+                    
+                    if not has_looped and does_cross_plane:
+                        # Find best reactive site on existing chain near intersection point
+                        from .loops import find_best_existing_site, find_best_new_chain_site, calculate_loop_rotation_angle, check_bis_orientation
+                        
+                        existing_site, distance_to_pivot_existing = find_best_existing_site(
+                            intersection_point, 
+                            end_carbon.position, 
+                            structure_univ,
+                            max_search_radius=monomer_length * 2  # Search within ~2 monomers
+                        )
+                        
+                        if not existing_site:
+                            continue  # No valid site found on existing chain
+                        
+                        # Find best reactive site on new chain
+                        new_chain_site, distance_to_pivot_new = find_best_new_chain_site(
+                            new_PAAm_univ,
+                            end_carbon.position,
+                            max_distance_from_pivot=distance_to_pivot_existing
+                        )
+                        
+                        if not new_chain_site:
+                            continue  # No valid site found on new chain
+                        
+                        # Get positions for angle calculation
+                        existing_site_pos = existing_site['central_carbon'].position
+                        new_chain_site_pos = new_chain_site['central_carbon'].position
+                        pivot_pos = end_carbon.position
+                        
+                        # Calculate rotation angle using law of cosines
+                        rotation_angle = calculate_loop_rotation_angle(
+                            pivot_pos,
+                            new_chain_site_pos,
+                            existing_site_pos,
+                            BIS_LENGTH=7.0
+                        )
+                        
+                        if rotation_angle is None:
+                            continue  # Invalid triangle -> skip this loop opportunity
+                        
+                        # Determine the direction of rotation
+                        vec_to_new_site = new_chain_site_pos - pivot_pos
+                        vec_to_existing_site = existing_site_pos - pivot_pos
+                        
+                        # If cross(vec_to_new, vec_to_existing) points along bis_dir, rotate positive
+                        # If it points opposite, rotate negative
+                        cross_product = np.cross(vec_to_new_site, vec_to_existing_site)
+                        bis_dir_normalized = bis_dir / np.linalg.norm(bis_dir)
+                        
+                        if np.dot(cross_product, bis_dir_normalized) < 0:
+                            rotation_angle = -rotation_angle  # Reverse direction
+                        
+                        # Rotate the entire new chain around the pivot point
+                        rotate_by_angle(
+                            atoms_to_keep,
+                            bis_dir_normalized,
+                            rotation_angle,
+                            point=pivot_pos
+                        )
+
+                        # Point roughly toward each other before accepting this loop
+                        new_chain_site_unpacked      = unpack_linking_site(new_chain_site)
+                        existing_chain_site_unpacked = unpack_linking_site(existing_site)
+
+                        if not check_bis_orientation(
+                            new_chain_site_unpacked,
+                            existing_chain_site_unpacked,
+                            MAX_BIS_ORIENTATION_ANGLE
+                        ):
+                            print(f'  Reactive sites not oriented toward each other, skipping.')
+                            continue
+                        
+                        # TODO: Need to actually connect the chains chemically
+                        # 1. Removing the reactive groups from both sites
+                        # 2. Adding a BIS molecule between them
+                        # 3. Merging everything together
+                        
+                        has_looped = True
+                        print('  Chain rotated into loop position! ===========================================================')
+                    
+                    # Re-check collision after rotation, still skipping the parent cylinder
+                    cts_atoms = atoms_to_keep.select_atoms('name CTS')
+                    new_cylinder = create_chain_cylinder(
+                        atoms_to_keep,
+                        start_index=cts_atoms[0].index,
+                        end_index=cts_atoms[1].index
+                    )
+                    if network.check_collision(new_cylinder, skip_cylinder=parent_cylinder):
+                        has_looped = False
+                        print('  Collision detected after rotation, continuing search...')
+                        continue  # try again
 # LOOP LOGIC ==============================================================================
 
             return mda.Merge(atoms_to_keep, structure_univ.atoms), new_cylinder

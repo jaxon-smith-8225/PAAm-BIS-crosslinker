@@ -26,28 +26,68 @@ class ChainCylinder:
 
 def segment_segment_distance(a1, a2, b1, b2):
     """
-    Calculate the minimum distance between two line segments in 3D space
-    
     Credit: Arfana
-    
+
+    Calculate the minimum distance between two finite line segments in 3D space.
+
+    Uses Ericson's method (Real-Time Collision Detection, Ch. 5) which correctly
+    clamps to segment extents, unlike the infinite-line formula.
+
     Args:
         a1, a2: Start and end points of first segment
         b1, b2: Start and end points of second segment
-        
+
     Returns:
         Minimum distance between the segments
     """
     a1, a2, b1, b2 = map(np.array, (a1, a2, b1, b2))
-    da = a2 - a1
-    db = b2 - b1
-    r = b1 - a1
+    da = a2 - a1   # Direction of segment A
+    db = b2 - b1   # Direction of segment B
+    r  = a1 - b1
 
-    cross = np.cross(da, db)
-    if np.linalg.norm(cross) < 1e-8:
-        distance = np.abs(np.cross(r, da)) / np.linalg.norm(da)
+    len_a_sq = np.dot(da, da)  # Squared length of A
+    len_b_sq = np.dot(db, db)  # Squared length of B
+    f = np.dot(db, r)
+
+    # Handle degenerate cases (zero-length segments)
+    if len_a_sq < 1e-10 and len_b_sq < 1e-10:
+        # Both segments are points
+        return np.linalg.norm(r)
+
+    if len_a_sq < 1e-10:
+        # Segment A is a point - clamp s=0, find closest point on B
+        s = 0.0
+        t = np.clip(f / len_b_sq, 0.0, 1.0)
     else:
-        distance = abs(np.dot(r, cross)) / np.linalg.norm(cross)
-    return distance
+        c = np.dot(da, r)
+        if len_b_sq < 1e-10:
+            # Segment B is a point - clamp t=0, find closest point on A
+            t = 0.0
+            s = np.clip(-c / len_a_sq, 0.0, 1.0)
+        else:
+            # General non-degenerate case
+            b_dot = np.dot(da, db)
+            denom = len_a_sq * len_b_sq - b_dot * b_dot  # Always >= 0
+
+            if denom > 1e-10:
+                # Segments are not parallel: compute closest point and clamp to [0,1]
+                s = np.clip((b_dot * f - c * len_b_sq) / denom, 0.0, 1.0)
+            else:
+                # Segments are parallel: pick s=0 arbitrarily
+                s = 0.0
+
+            # Compute t for the clamped s, then clamp t too
+            t = (b_dot * s + f) / len_b_sq
+            if t < 0.0:
+                t = 0.0
+                s = np.clip(-c / len_a_sq, 0.0, 1.0)
+            elif t > 1.0:
+                t = 1.0
+                s = np.clip((b_dot - c) / len_a_sq, 0.0, 1.0)
+
+    closest_a = a1 + s * da
+    closest_b = b1 + t * db
+    return np.linalg.norm(closest_a - closest_b)
 
 def point_segment_distance(circle_center, cylinder_to_check):
     """
@@ -180,3 +220,9 @@ def apply_random_rotation(universe, axis, min_angle, max_angle):
     universe = universe.select_atoms('all')
     rotate_by_angle(universe, axis, rand_rotation_angle)
     return rand_rotation_angle
+
+def r12(point1, point2):
+    dist = 0
+    for i in range(len(point1)):
+        dist += (point2[i] - point1[i]) ** 2
+    return np.sqrt(dist)

@@ -64,7 +64,6 @@ def main():
             final_modified_univ, new_cylinder = connect_PAAm(
                 bis_univ, first_modified_univ, network, template
             )
-            # HERE GOES THE LOOP DETECTION --> INSIDE connect_PAAm() --> CONNECTED TO crosslinking.py
         except RuntimeError as e:
             print(f"{e}: Trying again")
             continue
@@ -76,7 +75,7 @@ def main():
     
     # Write final structure
     print(f"\nWriting final structure to {OUTPUT_STRUCTURE}...")
-    network.structure.select_atoms('all').write(OUTPUT_STRUCTURE)
+    network.structure.select_atoms('all').write(OUTPUT_STRUCTURE, bonds='all')
     print(f"Final structure saved with {network.num_chains()} total chains!")
 
 
