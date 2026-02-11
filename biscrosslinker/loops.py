@@ -26,3 +26,6 @@ def find_possible_crosses(circle_center, coarse_circle_radius, cylinder_network)
         if min_dist > 20. and min_dist < coarse_circle_radius:
             possible_hits.append(cylinder)
     return possible_hits
+
+def find_point_of_intersection(cylinder, t):
+    return cylinder.start + t*(cylinder.axis)

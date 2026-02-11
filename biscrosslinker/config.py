@@ -6,7 +6,7 @@ Configuration parameters for BIS crosslinker simulation
 OUTPUT_STRUCTURE = "output.pdb"
 
 # Rotation parameters
-MIN_RAND_ANGLE = 20
+MIN_RAND_ANGLE = 40
 MAX_RAND_ANGLE = 200
 RAND_CHAIN_ROTATION = True
 MAX_ROTATION_ATTEMPTS = 25
@@ -18,4 +18,4 @@ CHAIN_RADIUS = 3.8
 MAX_NUM_CHAINS = 20
 
 # Crosslink spacing
-MIN_CROSSLINK_DISTANCE = 10.0
+MIN_CROSSLINK_DISTANCE = 15.0

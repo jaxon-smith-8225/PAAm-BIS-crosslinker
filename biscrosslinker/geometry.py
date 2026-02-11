@@ -120,7 +120,7 @@ def angle_between_vectors(v1, v2):
     return angle_degrees
 
 
-def rotate_by_angle(universe, axis, angle):
+def rotate_by_angle(universe_AtomGroup, axis, angle, point=[0, 0, 0]):
     """
     Rotate universe by specified angle around axis
     
@@ -131,7 +131,7 @@ def rotate_by_angle(universe, axis, angle):
     """
     axis = np.array(axis)
     axis = axis / np.linalg.norm(axis)
-    universe.atoms.rotateby(angle, axis, point=[0, 0, 0])
+    universe_AtomGroup.rotateby(angle, axis, point=point)
 
 
 def align_molecule(universe, source_vector, target_vector):
@@ -158,6 +158,7 @@ def align_molecule(universe, source_vector, target_vector):
     else:
         rotation_angle = angle_between_vectors(target_vector, source_vector)
     
+    universe = universe.select_atoms('all')
     rotate_by_angle(universe, rotation_axis, rotation_angle)
 
 
@@ -176,5 +177,6 @@ def apply_random_rotation(universe, axis, min_angle, max_angle):
     """
     import random
     rand_rotation_angle = random.randint(min_angle, max_angle)
+    universe = universe.select_atoms('all')
     rotate_by_angle(universe, axis, rand_rotation_angle)
     return rand_rotation_angle
