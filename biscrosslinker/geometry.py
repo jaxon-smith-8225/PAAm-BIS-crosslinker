@@ -49,6 +49,39 @@ def segment_segment_distance(a1, a2, b1, b2):
         distance = abs(np.dot(r, cross)) / np.linalg.norm(cross)
     return distance
 
+def point_segment_distance(circle_center, cylinder_to_check):
+    """
+    In:
+        center of circle = bis_univ.select_atoms('index 5)[0] = end_carbon
+        all the cylinders to check = network
+        the cylinder just added = new_cylinder
+
+    FIND LATER:
+        radius of circle = distance from pivot to longest end of chain 
+        = site['backbone_carbon'].position - new_cylinder.start/end
+
+    Out:
+        set of cylinders that are close enough to worry about
+    """
+
+    """
+    Equation for shortest distance btwn point and line segment
+
+    |(B-A) cross (P - A)| / |B-A|
+    || (new_cylinder.axis) x (end_carbon - new_cylinder.start) || / || (new_cylinder.length) ||
+    top_vector = np.cross(new_cylinder.axis, (end_carbon - new_cylinder.start))
+    numerator = np.linalg.norm(top_vector)
+    denominator = new_cylinder.length
+    min_dist = numerator / denominator
+    """
+    top_vector = np.linalg.cross(cylinder_to_check.axis, (circle_center - cylinder_to_check.start))
+    numerator = np.linalg.norm(top_vector)
+    denominator = cylinder_to_check.length
+    min_dist_inclusive = numerator / denominator
+    check_start = np.linalg.norm(circle_center - cylinder_to_check.start)
+    check_end = np.linalg.norm(circle_center - cylinder_to_check.end)
+    return min(min_dist_inclusive, check_start, check_end)
+
 
 def cylinders_collide(cyl1, cyl2):
     """

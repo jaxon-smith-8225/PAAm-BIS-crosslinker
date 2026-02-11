@@ -162,5 +162,4 @@ def create_chain_cylinder(chain_atom_group, radius=CHAIN_RADIUS):
         # Use first and last backbone carbons
         start_point = backbone_carbons[0].position.copy()
         end_point = backbone_carbons[-1].position.copy()
-    
     return ChainCylinder(start_point, end_point, radius)

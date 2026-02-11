@@ -1,7 +1,6 @@
 """
 Core crosslinking operations for connecting polymer chains
 """
-
 import random
 import MDAnalysis as mda
 from .chemistry import (
@@ -12,8 +11,11 @@ from .chemistry import (
     scan_chain
 )
 from .geometry import align_molecule, apply_random_rotation, rotate_by_angle
+from .loops import coarse_circle_radius, find_possible_crosses, does_cyl_cross_plane
 from .config import MAX_ROTATION_ATTEMPTS, RAND_CHAIN_ROTATION, MIN_RAND_ANGLE, MAX_RAND_ANGLE
 
+def find_point_of_intersection(cylinder, t):
+    return cylinder.start + t*(cylinder.axis)
 
 def replace_with_bis(linking_site, chain_universe):
     """
@@ -131,9 +133,17 @@ def connect_PAAm(bis_univ, structure_univ, network, template,
             if network.check_collision(new_cylinder):
                 continue  # try again
 
-            # LOOP CHECKING GOES HERE
-            # LOOP FORMING GOES AFTER
-            # IF NO LOOP --> MERGE LIKE NORMAL
+# LOOP LOGIC ==============================================================================
+            circle_radius = coarse_circle_radius(end_carbon.position, new_cylinder)
+            possible_hits = find_possible_crosses(end_carbon.position, circle_radius, network)
+            good_hits, good_points = [], []
+            for cylinder in possible_hits:
+                does_cross_plane, t = does_cyl_cross_plane(bis_dir, cylinder, end_carbon.position)
+                if does_cross_plane:
+                    good_hits.append(cylinder)
+                    good_points.append(find_point_of_intersection(cylinder, t))
+                    print(good_points[-1])
+
 
             return mda.Merge(atoms_to_keep, structure_univ.atoms), new_cylinder
 

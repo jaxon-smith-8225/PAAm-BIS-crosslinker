@@ -64,6 +64,7 @@ def main():
             final_modified_univ, new_cylinder = connect_PAAm(
                 bis_univ, first_modified_univ, network, template
             )
+            # HERE GOES THE LOOP DETECTION --> INSIDE connect_PAAm() --> CONNECTED TO crosslinking.py
         except RuntimeError as e:
             print(f"{e}: Trying again")
             continue
